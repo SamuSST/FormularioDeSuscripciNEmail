@@ -1,6 +1,6 @@
 import { FormEvent, useMemo, useState } from "react"
 import cafeInterior from "./assets/cafe-interior.png"
-import emailTemplate from "./email-template.html?raw"
+import { EMAILJS } from "./emailjs.config"
 
 type SendState = "idle" | "sending" | "success" | "error"
 
@@ -64,36 +64,13 @@ const CheckIcon = () => (
   </svg>
 )
 
-function escapeHtml(value: string) {
-  return value.replace(
-    /[&<>"']/g,
-    (character) =>
-      (({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#039;",
-      }) as Record<string, string>)[character],
-  )
-}
-
-function renderEmailHtml(email: string) {
-  const name = email ? email.split("@")[0].toUpperCase() : "AMANTE DEL CAFÉ"
-  return emailTemplate.replaceAll("{{subscriber_name}}", escapeHtml(name))
-}
-
 export default function App() {
   const [email, setEmail] = useState("")
   const [state, setState] = useState<SendState>("idle")
 
   const isConfigured = useMemo(
     () =>
-      Boolean(
-        import.meta.env.VITE_EMAILJS_SERVICE_ID &&
-          import.meta.env.VITE_EMAILJS_TEMPLATE_ID &&
-          import.meta.env.VITE_EMAILJS_PUBLIC_KEY,
-      ),
+      Object.values(EMAILJS).every((value) => value && !value.startsWith("TU_")),
     [],
   )
 
@@ -102,9 +79,11 @@ export default function App() {
     if (!email || state === "sending") return
     setState("sending")
 
+    // Antes: si faltaban las credenciales se simulaba un "éxito" falso.
+    // Ahora mostramos error para no engañar al usuario.
     if (!isConfigured) {
-      await new Promise((resolve) => window.setTimeout(resolve, 850))
-      setState("success")
+      console.error("Faltan las credenciales de EmailJS en src/emailjs.config.ts")
+      setState("error")
       return
     }
 
@@ -115,22 +94,25 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            service_id: import.meta.env.VITE_EMAILJS_SERVICE_ID,
-            template_id: import.meta.env.VITE_EMAILJS_TEMPLATE_ID,
-            user_id: import.meta.env.VITE_EMAILJS_PUBLIC_KEY,
+            service_id: EMAILJS.serviceId,
+            template_id: EMAILJS.templateId,
+            user_id: EMAILJS.publicKey,
             template_params: {
-              to_email: email,
-              subscriber_email: email,
-              subscriber_name: email.split("@")[0],
+              // "To Email" en EmailJS debe ser {{user_email}}
+              user_email: email,
+              subscriber_name: email.split("@")[0].toUpperCase(),
               discount_code: "MYTHOS15",
-              html_content: renderEmailHtml(email),
             },
           }),
         },
       )
-      if (!response.ok) throw new Error("No se pudo completar el envío")
+      if (!response.ok) {
+        // EmailJS responde con el motivo del error en texto plano
+        throw new Error(`EmailJS ${response.status}: ${await response.text()}`)
+      }
       setState("success")
-    } catch {
+    } catch (error) {
+      console.error(error)
       setState("error")
     }
   }
